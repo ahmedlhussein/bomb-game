@@ -1,0 +1,13 @@
+{
+  "name": "bomb-game",
+  "private": true,
+  "version": "1.0.0",
+  "description": "لعبة القنبلة - لعبة تنافسية جماعية سريعة على جهاز واحد (2-6 لاعبين)",
+  "engines": {
+    "node": ">=18.x"
+  },
+  "scripts": {
+    "dev": "node tests/devServer.js"
+  },
+  "dependencies": {}
+}
