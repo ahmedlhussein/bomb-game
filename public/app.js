@@ -243,7 +243,7 @@ function renderGameScreen() {
       </div>
 
       <div class="players-strip" id="players-strip">
-        ${view.players.map((p) => `<div class="player-chip ${p.isHolder ? 'holder' : ''} ${!p.alive ? 'dead' : ''}">${escapeHtml(p.name)}${p.alive ? ' (هادئ×' + p.calmCharges + ')' : ' - خرج'}</div>`).join('')}
+        ${view.players.map((p) => `<div class="player-chip ${p.isHolder ? 'holder' : ''} ${!p.alive ? 'dead' : ''}">${escapeHtml(p.name)} 🏆${p.score}${p.alive ? ' (هادئ×' + p.calmCharges + ')' : ' - خرج'}</div>`).join('')}
       </div>
 
       <div class="log-line" id="log-line">${view.recentLog.length ? escapeHtml(view.recentLog[view.recentLog.length - 1]) : ''}</div>
@@ -307,14 +307,19 @@ function renderActionsArea(view, holder) {
       <div class="event-banner">
         <h3>${escapeHtml(view.pendingEvent.title)}</h3>
         <div class="btn-grid" id="event-options">
-          ${view.pendingEvent.options.map((o) => `<button class="btn btn-secondary" data-id="${o.id}">${escapeHtml(o.label)}</button>`).join('')}
+          ${view.pendingEvent.options.map((o) => `<button class="btn btn-secondary" data-id="${o.id}">${escapeHtml(o.label)}${formatPointsHint(o)}</button>`).join('')}
         </div>
       </div>
     `;
     area.querySelectorAll('#event-options button').forEach((btn) => {
       btn.addEventListener('click', () => {
+        const wasGamble = gameState.pendingEvent && gameState.pendingEvent.type === 'BOLD_MOMENT' && btn.dataset.id === 'gamble';
         const res = BombGameEngine.applyAction(gameState, holder.id, { type: BombGameEngine.ACTIONS.RESOLVE_EVENT, choiceId: btn.dataset.id }, Date.now());
-        if (res.ok) { playSoundAfterAction(); saveGame(gameState); render(); }
+        if (res.ok) {
+          if (wasGamble) playSound('pointsReveal'); else playSoundAfterAction();
+          saveGame(gameState);
+          render();
+        }
       });
     });
     return;
@@ -367,6 +372,7 @@ function renderWinnerScreen() {
       <div class="confetti-emoji">🎉</div>
       <div class="subtitle">الفائز</div>
       <div class="name">${escapeHtml(winner.name)}</div>
+      <div class="winner-score">🏆 ${winner.score} نقطة جرأة</div>
       <div class="btn-grid" style="margin-top:20px;">
         <button class="btn btn-primary" id="new-round">ابدأ دور جديد</button>
         <button class="btn btn-outline" id="exit-game">خروج</button>
@@ -391,6 +397,11 @@ function renderWinnerScreen() {
 }
 
 /** ------------------------- أدوات مساعدة ------------------------- */
+function formatPointsHint(option) {
+  if (option.pointsRange) return ` (من ${option.pointsRange[0]} إلى ${option.pointsRange[1]} 🏆)`;
+  if (option.points) return ` (+${option.points} 🏆)`;
+  return '';
+}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
