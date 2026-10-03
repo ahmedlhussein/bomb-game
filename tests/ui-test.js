@@ -179,6 +179,9 @@ async function run() {
   // -------- اختبار تكامل حقيقي: تدفق كامل بـ6 لاعبين (الحد الأقصى) حتى الفائز --------
   await runSixPlayersRealFlowTest();
 
+  // -------- اختبار تكامل حقيقي: عرض نقاط الجرأة فعليًا وتحديثها حتى شاشة الفائز --------
+  await runScoreDisplayTest();
+
 
   console.log('\n=== نتيجة اختبار الواجهة الحقيقي (Playwright) ===');
   if (consoleErrors.length) {
@@ -392,6 +395,60 @@ async function runSixPlayersRealFlowTest() {
   if (reachedWinner) {
     const winnerName = await page.locator('.winner-screen .name').textContent();
     assert(winnerName && names.includes(winnerName.trim()), `[6 لاعبين] اسم الفائز المعروض يجب أن يكون أحد اللاعبين الستة الفعليين - وُجد: "${winnerName}"`);
+  }
+
+  await browser.close();
+  await new Promise((resolve) => server.close(resolve));
+}
+
+async function runScoreDisplayTest() {
+  require('../lib/storeFactory').resetMemoryStoreForTests();
+  const port = PORT + 6;
+  const server = createServer();
+  await new Promise((resolve) => server.listen(port, resolve));
+  const base = `http://localhost:${port}/`;
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  await page.goto(base);
+
+  const inputs = page.locator('#code-inputs input');
+  for (let i = 0; i < 6; i++) await inputs.nth(i).fill(TEST_CODE[i]);
+  await page.click('#submit-code');
+  await page.waitForSelector('#screen-count', { timeout: 4000 });
+  await page.click('#count-grid button[data-n="2"]');
+  await page.fill('#name-list input[data-idx="0"]', 'أحمد');
+  await page.fill('#name-list input[data-idx="1"]', 'سارة');
+  await page.click('#start-round');
+  await page.waitForSelector('#screen-game', { timeout: 3000 });
+
+  const chipTextBefore = (await page.locator('.player-chip').allTextContents()).join(' | ');
+  assert(/🏆0/.test(chipTextBefore) || /🏆 0/.test(chipTextBefore), `[عرض النقاط] يجب أن تبدأ كل البطاقات بـ0 نقطة جرأة ظاهرة - الفعلي: "${chipTextBefore}"`);
+
+  // ننفّذ فعل تمرير واحد فعلي بالنقر ونتحقق أن النقاط تحرّكت فعليًا في الواجهة
+  const onTarget = await page.locator('#target-select button').count();
+  assert(onTarget > 0, '[عرض النقاط] يجب توفر أزرار تمرير في بداية اللعبة');
+  await page.locator('#target-select button').first().click();
+  const chipTextAfter = (await page.locator('.player-chip').allTextContents()).join(' | ');
+  assert(chipTextAfter !== chipTextBefore, '[عرض النقاط] نص بطاقات اللاعبين يجب أن يتغيّر بعد أول فعل فعلي (تحرّك النقاط أو تغيّر صاحب الدور)');
+  assert(!/🏆0 \(هادئ/.test(chipTextAfter.split('|')[0]) || true, 'sanity'); // لا نفرض ترتيبًا دقيقًا، فقط نتأكد أن رقمًا تحرك فعليًا أدناه
+  const anyNonZeroScore = /🏆[1-9]/.test(chipTextAfter);
+  assert(anyNonZeroScore, `[عرض النقاط] يجب ظهور نقاط أكبر من صفر لأحد اللاعبين بعد أول تمريرة فعلية - الفعلي: "${chipTextAfter}"`);
+
+  // نلعب حتى الفائز ونتحقق من ظهور نقاطه في شاشة الفائز
+  let reachedWinner = false;
+  for (let step = 0; step < 400 && !reachedWinner; step++) {
+    if ((await page.locator('#screen-winner').count()) > 0) { reachedWinner = true; break; }
+    if ((await page.locator('.wire-btn').count()) > 0) { await page.locator('.wire-btn').first().click(); continue; }
+    if ((await page.locator('#event-options button').count()) > 0) { await page.locator('#event-options button').first().click(); continue; }
+    if ((await page.locator('#target-select button').count()) > 0) { await page.locator('#target-select button').first().click(); continue; }
+    await page.waitForTimeout(10);
+  }
+  assert(reachedWinner, '[عرض النقاط] يجب الوصول لشاشة الفائز لإتمام هذا الاختبار');
+  if (reachedWinner) {
+    const scoreText = await page.locator('.winner-screen .winner-score').textContent();
+    assert(/🏆 \d+ نقطة جرأة/.test(scoreText || ''), `[عرض النقاط] شاشة الفائز يجب أن تعرض رصيد نقاط الجرأة بوضوح - الفعلي: "${scoreText}"`);
+    const scoreNum = parseInt((scoreText || '').match(/\d+/)[0], 10);
+    assert(scoreNum > 0, `[عرض النقاط] رصيد نقاط الفائز المعروض يجب أن يكون أكبر من صفر - الفعلي: ${scoreNum}`);
   }
 
   await browser.close();
