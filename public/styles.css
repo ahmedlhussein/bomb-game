@@ -197,6 +197,7 @@ h1, h2, h3 { margin: 0; text-align: center; }
 
 /* ---------- شاشة الفائز ---------- */
 .winner-screen .name { font-size: 40px; font-weight: 900; color: var(--accent); text-shadow: 0 0 20px rgba(255,197,66,.5); }
+.winner-screen .winner-score { font-size: 18px; font-weight: 700; color: var(--secondary); margin-top: 6px; }
 .confetti-emoji { font-size: 46px; }
 
 /* ---------- Pause overlay ---------- */
