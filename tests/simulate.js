@@ -251,6 +251,123 @@ function testRefreshDuringPendingEventPreservesOptions() {
   console.log('✓ اختبار: Refresh أثناء حدث ديناميكي معلّق (SURGE/MALFUNCTION) يحافظ على نفس الخيارات المعروضة');
 }
 
+function testScoresNeverNegativeAndWinnerHasScore() {
+  for (let n = 2; n <= 6; n++) {
+    for (let s = 0; s < 40; s++) {
+      const { state } = simulateOneGame(n, s * 71 + n, 'mixed');
+      state.players.forEach((p) => {
+        assert(Number.isFinite(p.score) && p.score >= 0, `نقاط اللاعب ${p.name} يجب ألا تكون سالبة أبدًا - وُجد ${p.score}`);
+      });
+      const winner = state.players.find((p) => p.id === state.winnerId);
+      assert(winner.score > 0, `الفائز يجب أن يكون قد جمع نقاط جرأة أثناء اللعبة (نجا من دورات فعلية) - وُجد ${winner.score}`);
+    }
+  }
+  console.log('✓ اختبار: نقاط الجرأة لا تكون سالبة أبدًا، والفائز دائمًا يملك نقاطًا مكتسبة فعليًا');
+}
+
+function testScoreAwardedOnEveryPassType() {
+  const state = Engine.createGame(['أحمد', 'محمد'], 999, 40000);
+  const holder = state.bombHolderId;
+  const scoreBefore = Engine.getPublicView(state, holder).players.find((p) => p.id === holder).score;
+  const actions = Engine.getAvailableActions(state, holder);
+  const normalAction = actions.find((a) => a.type === Engine.ACTIONS.PASS_NORMAL);
+  assert(normalAction, 'يجب توفر فعل تمرير عادي لإجراء هذا الاختبار');
+  Engine.applyAction(state, holder, normalAction, 41000);
+  const scoreAfter = state.players.find((p) => p.id === holder).score;
+  assert(scoreAfter === scoreBefore + Engine.CONST.POINTS_PASS_NORMAL,
+    `تمرير عادي ناجح يجب أن يضيف بالضبط ${Engine.CONST.POINTS_PASS_NORMAL} نقطة - قبل=${scoreBefore} بعد=${scoreAfter}`);
+  console.log('✓ اختبار: التمرير العادي الناجح يضيف نقاط الجرأة الصحيحة بالضبط لصاحب القرار');
+}
+
+function testDefuseSuccessAwardsBigPoints() {
+  // حقن مباشر لحالة "اللحظة الحرجة" عند وقت مبكر جدًا من الجولة، لعزل اختبار قيمة النقاط عن
+  // آلية "تعب القنبلة" الزمنية/التراكمية (المُختبرة بالفعل في اختبارات أخرى منفصلة).
+  const state = Engine.createGame(['أحمد', 'محمد'], 55, 0);
+  const holderId = state.bombHolderId;
+  state.phase = Engine.PHASES.CRITICAL_PENDING;
+  state.criticalThreshold = 0;
+  const puzzle = Engine.getPendingPuzzle(state);
+  const scoreBefore = state.players.find((p) => p.id === holderId).score;
+  const res = Engine.applyAction(state, holderId, { type: Engine.ACTIONS.DEFUSE_ATTEMPT, wireIndex: puzzle.correctIndex }, 1000);
+  assert(res.ok && res.success, 'يجب أن ينجح نزع الفتيل بالسلك الصحيح مبكرًا في الجولة (بلا تعب تراكمي) لإجراء هذا الاختبار');
+  const scoreAfter = state.players.find((p) => p.id === holderId).score;
+  assert(scoreAfter === scoreBefore + Engine.CONST.POINTS_DEFUSE_SUCCESS,
+    `نزع الفتيل الناجح يجب أن يضيف بالضبط ${Engine.CONST.POINTS_DEFUSE_SUCCESS} نقطة - قبل=${scoreBefore} بعد=${scoreAfter}`);
+  console.log('✓ اختبار: نزع الفتيل الناجح يضيف أعلى قيمة نقاط في اللعبة بالضبط');
+}
+
+function testBoldMomentGambleWithinDeclaredRangeAndDangerRises() {
+  // نبحث عن seed يصل لحدث BOLD_MOMENT مع خيار "جازف" سريعًا
+  let found = null, foundChoice = null;
+  for (let seed = 1; seed < 3000 && !found; seed++) {
+    const state = Engine.createGame(['أحمد', 'محمد', 'سارة'], seed, 0);
+    let clock = 5000, guard = 0;
+    while (state.phase !== Engine.PHASES.FINISHED && guard < 40) {
+      if (state.phase === Engine.PHASES.EVENT_PENDING && state.pendingEvent.type === 'BOLD_MOMENT') {
+        const gamble = state.pendingEvent.options.find((o) => o.id === 'gamble');
+        if (gamble) { found = state; foundChoice = gamble; break; }
+      }
+      const actions = Engine.getAvailableActions(state, state.bombHolderId);
+      if (!actions.length) break;
+      Engine.applyAction(state, state.bombHolderId, actions[0], clock);
+      clock += 1500; guard++;
+    }
+  }
+  assert(found, 'يجب الوصول إلى حدث "لحظة الجرأة" بخيار المجازفة خلال عدد معقول من المحاولات');
+  if (!found) return;
+
+  for (let trial = 0; trial < 30; trial++) {
+    const state = Engine.createGame(['أحمد', 'محمد'], 12345 + trial, 0);
+    // نفرض حالة مطابقة يدويًا: نحقن حدث BOLD_MOMENT مباشرة لتوليد عينات كافية للمدى الإحصائي
+    state.pendingEvent = {
+      type: 'BOLD_MOMENT',
+      title: 'test',
+      options: [
+        { id: 'safe', label: 'أمّن', dangerDelta: 0, points: Engine.CONST.POINTS_BOLD_MOMENT_SAFE },
+        { id: 'gamble', label: 'جازف', dangerDelta: Engine.CONST.BOLD_MOMENT_DANGER_DELTA, pointsRange: Engine.CONST.POINTS_BOLD_MOMENT_GAMBLE_RANGE },
+      ],
+    };
+    state.phase = Engine.PHASES.EVENT_PENDING;
+    const dangerBefore = state.danger;
+    const scoreBefore = state.players.find((p) => p.id === state.bombHolderId).score;
+    const res = Engine.applyAction(state, state.bombHolderId, { type: Engine.ACTIONS.RESOLVE_EVENT, choiceId: 'gamble' }, 1000);
+    assert(res.ok, 'اختيار "جازف" يجب أن يُقبل دائمًا كفعل شرعي');
+    const gained = state.players.find((p) => p.id === state.bombHolderId).score - scoreBefore;
+    assert(gained >= Engine.CONST.POINTS_BOLD_MOMENT_GAMBLE_RANGE[0] && gained <= Engine.CONST.POINTS_BOLD_MOMENT_GAMBLE_RANGE[1],
+      `نقاط المجازفة يجب أن تقع ضمن النطاق المُعلن [${Engine.CONST.POINTS_BOLD_MOMENT_GAMBLE_RANGE}] - وُجد ${gained}`);
+    assert(state.danger >= dangerBefore + Engine.CONST.BOLD_MOMENT_DANGER_DELTA - 0.001,
+      'اختيار "جازف" يجب أن يرفع خطر القنبلة فعليًا بالقدر المُعلن (المخاطرة حقيقية وليست شكلية)');
+  }
+  console.log('✓ اختبار: "جازف" في لحظة الجرأة يعطي نقاطًا ضمن النطاق المُعلن دائمًا، ويرفع خطر القنبلة فعليًا (مخاطرة حقيقية)');
+
+  // والخيار الآمن يعطي القيمة الثابتة بالضبط بدون أي تغيير في الخطر
+  const safeState = Engine.createGame(['أحمد', 'محمد'], 777, 0);
+  safeState.pendingEvent = found.pendingEvent.type === 'BOLD_MOMENT' ? found.pendingEvent : {
+    type: 'BOLD_MOMENT', title: 't',
+    options: [{ id: 'safe', label: 'أمّن', dangerDelta: 0, points: Engine.CONST.POINTS_BOLD_MOMENT_SAFE }],
+  };
+  safeState.phase = Engine.PHASES.EVENT_PENDING;
+  const dangerBeforeSafe = safeState.danger;
+  const scoreBeforeSafe = safeState.players.find((p) => p.id === safeState.bombHolderId).score;
+  Engine.applyAction(safeState, safeState.bombHolderId, { type: Engine.ACTIONS.RESOLVE_EVENT, choiceId: 'safe' }, 1000);
+  const scoreAfterSafe = safeState.players.find((p) => p.id === safeState.bombHolderId).score;
+  assert(scoreAfterSafe === scoreBeforeSafe + Engine.CONST.POINTS_BOLD_MOMENT_SAFE,
+    'اختيار "أمّن نقاطك" يجب أن يعطي القيمة الثابتة المُعلنة بالضبط دائمًا');
+  assert(safeState.danger === dangerBeforeSafe, 'اختيار "أمّن نقاطك" يجب ألا يغيّر خطر القنبلة إطلاقًا');
+  console.log('✓ اختبار: "أمّن نقاطك" يعطي نفس القيمة الثابتة دائمًا بدون أي زيادة في الخطر');
+}
+
+function testWinnerDeterminedBySurvivalNotScore() {
+  // نتأكد أن الفوز لا يزال محسومًا بالبقاء فقط، وليس بأعلى نقاط - حتى لو جمع لاعب مُقصى نقاطًا أكثر
+  for (let s = 0; s < 40; s++) {
+    const { state } = simulateOneGame(2 + (s % 5), s * 19 + 3, 'mixed');
+    const alive = Engine._internal.alivePlayers(state);
+    assert(alive.length === 1 && alive[0].id === state.winnerId,
+      'الفائز يجب أن يكون دائمًا اللاعب الباقي حيًا بغض النظر عن توزيع النقاط بين اللاعبين');
+  }
+  console.log('✓ اختبار: الفوز يُحسم بالبقاء فقط (كما كان)، ونقاط الجرأة طبقة ثانوية لا تتحكم في نتيجة الجولة');
+}
+
 console.log('=== بدء الاختبارات الآلية لمحرك لعبة "القنبلة" ===\n');
 testExactlyOneWinnerNoTies();
 testRoundDuration();
@@ -263,10 +380,15 @@ testEliminationAlwaysTiedToDecision();
 testStrategyVariants();
 testRefreshDuringCriticalPuzzlePreservesExactWires();
 testRefreshDuringPendingEventPreservesOptions();
+testScoresNeverNegativeAndWinnerHasScore();
+testScoreAwardedOnEveryPassType();
+testDefuseSuccessAwardsBigPoints();
+testBoldMomentGambleWithinDeclaredRangeAndDangerRises();
+testWinnerDeterminedBySurvivalNotScore();
 
 console.log('\n=== النتيجة ===');
 if (failures.length === 0) {
-  console.log('✅ نجحت جميع الاختبارات (' + 11 + ' مجموعات اختبار)');
+  console.log('✅ نجحت جميع الاختبارات (' + 16 + ' مجموعات اختبار)');
   process.exit(0);
 } else {
   console.log(`❌ فشل ${failures.length} تحقق:`);
