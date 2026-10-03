@@ -70,6 +70,20 @@
     TIME_ESCALATION_FACTORS: [1.15, 1.35, 1.7],
     RESTRICTED_TARGET_MEMORY: 2, // "خلل القنبلة": يمنع تكرار نفس الهدف خلال آخر عدد أدوار
     DEFUSE_OPTIONS_COUNT: 4,
+
+    // ------------------------- نقاط الجرأة (Boldness Points) -------------------------
+    // هدف ثانوي ظاهر طول اللعبة يعطي إحساس تقدّم لحظي، بالإضافة لهدف البقاء الأساسي.
+    // كل قيمة مرتبطة بقرار فعلي اتخذه اللاعب - لا نقاط عشوائية تمامًا بلا سبب.
+    POINTS_PASS_NORMAL: 3,
+    POINTS_PASS_CALM: 2,
+    POINTS_PASS_BOLD: 6,
+    POINTS_SURGE_BRAVE: 4,
+    POINTS_SURGE_CAREFUL: 2,
+    POINTS_MALFUNCTION: 3,
+    POINTS_BOLD_MOMENT_SAFE: 4,
+    POINTS_BOLD_MOMENT_GAMBLE_RANGE: [5, 25], // نطاق محدود ومُعلن - ليس حظًا خالصًا لأنه لا يقرر الفائز، فقط يضيف حماس "الكشف"
+    POINTS_DEFUSE_SUCCESS: 15,
+    BOLD_MOMENT_DANGER_DELTA: 10,
     MIN_ROUND_MS: 31000, // لا يمكن الوصول لـ"اللحظة الحرجة" قبل مرور هذه المدة الداخلية (هامش أمان فوق 30 ثانية)
     DANGER_CAP_BEFORE_MIN: 96,
     TIME_FATIGUE_START_MS: 140000, // من هذه اللحظة الداخلية فصاعدًا، يبدأ ضمان زمني إضافي لإنهاء الجولة
@@ -119,6 +133,7 @@
       calmCharges: CONST.CALM_CHARGES_PER_PLAYER,
       eliminationReason: null,
       turnsHeld: 0,
+      score: 0, // نقاط الجرأة - هدف ثانوي تراكمي، لا يقرر الفائز (البقاء هو الحاسم)، فقط يُعرض كإنجاز
     }));
 
     // اختيار حامل القنبلة الأول بعدالة: عشوائي بحت من بذرة الجولة، لا ميزة لأول/آخر اسم.
@@ -255,30 +270,42 @@
     state.lastEventAtTurn = state.turnCounter;
     const holder = getPlayer(state, state.bombHolderId);
     const roll = state._rng();
-    if (roll < 0.5) {
+    if (roll < 0.4) {
       // ارتفاع مفاجئ: قرار "شجاعة/حذر" - كلاهما مفهوم ومعلن السبب
       state.pendingEvent = {
         type: 'SURGE',
         title: 'ارتفاع مفاجئ في القنبلة!',
         options: [
-          { id: 'brave', label: 'تحمّل الخطر', dangerDelta: 6 },
-          { id: 'careful', label: 'تهدئة حذرة', dangerDelta: -4, costsCalm: true },
+          { id: 'brave', label: 'تحمّل الخطر', dangerDelta: 6, points: CONST.POINTS_SURGE_BRAVE },
+          { id: 'careful', label: 'تهدئة حذرة', dangerDelta: -4, costsCalm: true, points: CONST.POINTS_SURGE_CAREFUL },
         ],
       };
-    } else {
+    } else if (roll < 0.75) {
       // خلل في القنبلة: يقيّد اختيار الهدف مؤقتًا (تحدٍ إضافي، ليس عقابًا عشوائيًا)
       const targets = legalTargets(state, holder.id);
       const forced = targets.length > 0 ? [pick(state._rng, targets)] : [];
       state.pendingEvent = {
         type: 'MALFUNCTION',
         title: 'خلل في القنبلة! التمرير مقيّد هذه المرة',
-        options: forced.map((tid) => ({ id: 'to_' + tid, label: 'مرّر إلى ' + getPlayer(state, tid).name, targetId: tid, dangerDelta: 5 })),
+        options: forced.map((tid) => ({ id: 'to_' + tid, label: 'مرّر إلى ' + getPlayer(state, tid).name, targetId: tid, dangerDelta: 5, points: CONST.POINTS_MALFUNCTION })),
       };
       if (state.pendingEvent.options.length === 0) {
         // لا يوجد هدف صالح - نلغي الحدث فورًا (حالة نادرة عند لاعبَين فقط)
         state.pendingEvent = null;
         return;
       }
+    } else {
+      // لحظة الجرأة: اختيار بين تأمين نقاط مضمونة قليلة أو المجازفة بخطر حقيقي مقابل نقاط أكبر
+      // تُكشف فورًا - هذا هو مصدر "إثارة الكشف" في اللعبة، لكنه لا يقرر الفائز إطلاقًا (البقاء
+      // وحده يقرر ذلك)، فقط يضيف حماسًا لحظيًا وهدفًا رقميًا ظاهرًا طول اللعبة.
+      state.pendingEvent = {
+        type: 'BOLD_MOMENT',
+        title: 'لحظة الجرأة! أمّن رصيدك أم تجازف؟',
+        options: [
+          { id: 'safe', label: 'أمّن نقاطك', dangerDelta: 0, points: CONST.POINTS_BOLD_MOMENT_SAFE },
+          { id: 'gamble', label: 'جازف!', dangerDelta: CONST.BOLD_MOMENT_DANGER_DELTA, pointsRange: CONST.POINTS_BOLD_MOMENT_GAMBLE_RANGE },
+        ],
+      };
     }
     state.phase = PHASES.EVENT_PENDING;
     pushLog(state, state.pendingEvent.title);
@@ -332,7 +359,12 @@
       if (choice.costsCalm && player.calmCharges <= 0) return { ok: false, error: 'لا تملك محاولات تهدئة كافية' };
       if (choice.costsCalm) player.calmCharges -= 1;
       applyDangerDelta(state, choice.dangerDelta || 0);
-      pushLog(state, `${player.name} اختار: ${choice.label}`);
+      let pointsAwarded = choice.points || 0;
+      if (choice.pointsRange) {
+        pointsAwarded = randInt(state._rng, choice.pointsRange[0], choice.pointsRange[1]);
+      }
+      player.score += pointsAwarded;
+      pushLog(state, `${player.name} اختار: ${choice.label}` + (pointsAwarded ? ` (+${pointsAwarded} نقطة جرأة)` : ''));
       state.pendingEvent = null;
       const nextHolder = choice.targetId || state.bombHolderId;
       state.phase = PHASES.PLAYING;
@@ -350,19 +382,24 @@
     if (!targets.includes(action.targetId)) return { ok: false, error: 'هدف غير قانوني' };
 
     let delta;
+    let pointsAwarded;
     if (action.type === ACTIONS.PASS_NORMAL) {
       delta = randRange(state._rng, CONST.NORMAL_DELTA[0], CONST.NORMAL_DELTA[1]);
+      pointsAwarded = CONST.POINTS_PASS_NORMAL;
     } else if (action.type === ACTIONS.PASS_CALM) {
       if (player.calmCharges <= 0) return { ok: false, error: 'لا تملك تمريرات هادئة متبقية' };
       player.calmCharges -= 1;
       delta = randRange(state._rng, CONST.CALM_DELTA[0], CONST.CALM_DELTA[1]);
+      pointsAwarded = CONST.POINTS_PASS_CALM;
     } else {
       delta = randRange(state._rng, CONST.BOLD_DELTA[0], CONST.BOLD_DELTA[1]);
       state.boldCooldownTurnsLeft = CONST.BOLD_COOLDOWN_TURNS;
+      pointsAwarded = CONST.POINTS_PASS_BOLD;
     }
     applyDangerDelta(state, delta);
+    player.score += pointsAwarded;
     const targetName = getPlayer(state, action.targetId).name;
-    pushLog(state, `${player.name} مرّر القنبلة إلى ${targetName}`);
+    pushLog(state, `${player.name} مرّر القنبلة إلى ${targetName} (+${pointsAwarded} نقطة جرأة)`);
     advanceTurn(state, action.targetId, now);
     if (state.phase === PHASES.PLAYING) maybeTriggerEvent(state, now);
     checkWinner(state);
@@ -417,7 +454,8 @@
       state.danger = 30;
       state.criticalThreshold = randInt(state._rng, CONST.CRITICAL_MIN, CONST.CRITICAL_MAX);
       state.phase = PHASES.PLAYING;
-      pushLog(state, `${player.name} نزع الفتيل بنجاح! القنبلة عادت آمنة نسبيًا.`);
+      player.score += CONST.POINTS_DEFUSE_SUCCESS;
+      pushLog(state, `${player.name} نزع الفتيل بنجاح! القنبلة عادت آمنة نسبيًا. (+${CONST.POINTS_DEFUSE_SUCCESS} نقطة جرأة)`);
       // نفس اللاعب لا يزال يحمل القنبلة، لكن يجب أن يمرّرها في دوره - ننتقل مباشرة لدور تمرير عادي
       maybeTriggerEvent(state, now);
       checkWinner(state);
@@ -481,13 +519,22 @@
         name: p.name,
         alive: p.alive,
         calmCharges: p.calmCharges,
+        score: p.score,
         isHolder: p.id === state.bombHolderId,
         eliminationReason: p.eliminationReason,
       })),
       dangerLabel: dangerLabel(state.danger),
       phase: state.phase,
       pendingEvent: state.pendingEvent
-        ? { title: state.pendingEvent.title, options: state.pendingEvent.options.map((o) => ({ id: o.id, label: o.label })) }
+        ? {
+            title: state.pendingEvent.title,
+            options: state.pendingEvent.options.map((o) => ({
+              id: o.id,
+              label: o.label,
+              points: o.points,
+              pointsRange: o.pointsRange,
+            })),
+          }
         : null,
       puzzle: state.phase === PHASES.CRITICAL_PENDING ? getPendingPuzzle(state).wires : null,
       winnerId: state.winnerId,
