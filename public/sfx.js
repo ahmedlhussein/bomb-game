@@ -92,6 +92,11 @@
       tone(300, 0, 0.18, { type: 'sawtooth', sweepTo: 90, volume: 0.2 });
       noiseBurst(0.02, 0.2, { volume: 0.1 });
     },
+    // كشف نقاط المجازفة: نغمة "فتح مفاجأة" قصيرة ومتصاعدة قبل استقرارها (إحساس الكشف واللحظة)
+    pointsReveal() {
+      tone(400, 0, 0.05, { type: 'triangle', sweepTo: 700, volume: 0.1 });
+      tone(900, 0.07, 0.12, { type: 'sine', volume: 0.17 });
+    },
     // إعلان الفائز: نغمات احتفالية صاعدة
     winner() {
       [523, 659, 784, 1046].forEach((f, i) => tone(f, i * 0.12, 0.18, { type: 'triangle', volume: 0.18 }));
